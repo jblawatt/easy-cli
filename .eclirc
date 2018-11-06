@@ -1,0 +1,15 @@
+{
+    "Bin": "restic",
+    "Env": {
+        "RESTIC_PASSWORD_FILE": "C:/Users/jblaw/.resticpw",
+        "RESTIC_REPOSITORY": "C:/Users/jblaw/.restic-repo"
+    },
+    "Args": {},
+    "Default": "",
+    "Commands": {
+        "snapshots": {
+            "Default": true,
+            "Command": "snapshots"
+        }
+    }
+}
