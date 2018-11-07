@@ -5,6 +5,7 @@ import (
 )
 
 func main() {
+
 	if err := ecmd.RootCmd.Execute(); err != nil {
 		panic(err)
 	}

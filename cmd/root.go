@@ -1,56 +1,71 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
+	"strings"
+	"text/template"
 
 	"github.com/spf13/cobra"
 )
 
-type Args map[string]interface{}
-type Env map[string]interface{}
+type Flags map[string]interface{}
+type Env map[string]string
+type Args []string
 
-type CommandConfig struct {
-	Command string
-	Args    map[string]interface{}
-	Env     map[string]interface{}
+func (e Env) ToArray() []string {
+	var result []string
+	for key, value := range e {
+		result = append(result, fmt.Sprintf("%s=%s", key, value))
+	}
+	return result
 }
 
-func (c *CommandConfig) GetArgs() map[string]interface{} {
+type CommandConfig struct {
+	Args  Args  `json:"args"`
+	Flags Flags `json:"flags"`
+	Env   Env   `json:"env"`
+}
+
+func (c *CommandConfig) GetArgs() Args {
 	return c.Args
 }
 
-func (c *CommandConfig) GetEnv() map[string]interface{} {
+func (c *CommandConfig) GetEnv() Env {
 	return c.Env
 }
 
-type RunConfig struct {
-	Bin      string
-	Default  string
-	Args     []string
-	Flags    map[string]interface{}
-	Env      map[string]interface{}
-	Commands map[string]CommandConfig
+func (c *CommandConfig) GetFlags() Flags {
+	return c.Flags
 }
 
-func (r *RunConfig) GetArgs() Args {
-	return r.Args
+type MainConfig struct {
+	Bin      string                   `json:"bin"`
+	Default  string                   `json:"default"`
+	Flags    Flags                    `json:"flags"`
+	Env      Env                      `json:"env"`
+	Commands map[string]CommandConfig `json:"commands"`
 }
 
-func (r *RunConfig) GetEnv() Env {
+func (r *MainConfig) GetEnv() Env {
 	return r.Env
 }
 
-type BaseConfig interface {
+type Config interface {
 	GetArgs() Args
 	GetEnv() Env
+	GetFlags() Flags
 }
 
-func mergeMaps(a map[string]interface{}, b map[string]interface{}) map[string]interface{} {
-	m := make(map[string]interface{})
+func mergeFlags(a Flags, b Flags) Flags {
+	if b == nil {
+		return a
+	}
+	var m Flags
 	for k, v := range a {
 		m[k] = v
 	}
@@ -60,10 +75,23 @@ func mergeMaps(a map[string]interface{}, b map[string]interface{}) map[string]in
 	return m
 }
 
-func makeArgs(a map[string]interface{}) []string {
-
-	var result []string
+func mergeEnv(a Env, b Env) Env {
+	if b == nil {
+		return a
+	}
+	var m Env
 	for k, v := range a {
+		m[k] = v
+	}
+	for k, v := range b {
+		m[k] = v
+	}
+	return m
+}
+
+func (f Flags) FlagList() []string {
+	var result []string
+	for k, v := range f {
 		switch v := v.(type) {
 		default:
 			result = append(result, k, fmt.Sprintf("%s", v))
@@ -91,37 +119,72 @@ func makeEnv(input map[string]interface{}) []string {
 	return result
 }
 
-func callCommand(bin string, c CommandConfig, defaults RunConfig) {
-
-	args := makeArgs(mergeMaps(defaults.GetArgs(), c.GetArgs()))
-	env := makeEnv(mergeMaps(defaults.GetEnv(), c.GetEnv()))
-
-	if c.Command != "" {
-		l := []string{c.Command}
-		args = append(l, args...)
+func transformValues(args []string) []string {
+	var result []string
+	envMap := make(map[string]string)
+	for _, value := range os.Environ() {
+		s := strings.Split(value, "=")
+		envMap[s[0]] = s[1]
 	}
+	for _, arg := range args {
+		t, err := template.New("").Parse(arg)
+		if err != nil {
+			result = append(result, arg)
+		} else {
+			var buff bytes.Buffer
+			terr := t.Execute(&buff, envMap)
+			if terr != nil {
+				result = append(result, arg)
+			} else {
+				result = append(result, buff.String())
+			}
+		}
+
+	}
+	return result
+}
+
+func callCommand(bin string, c CommandConfig, defaults MainConfig, dry bool) {
+
+	var args []string
+
+	args = append(args, c.Args...)
+	flags := mergeFlags(defaults.Flags, c.Flags)
+	args = append(args, flags.FlagList()...)
+	args = transformValues(args)
+
+	env := mergeEnv(defaults.Env, c.Env)
 
 	log.Println(args)
 	log.Println(env)
 
 	toexec := exec.Command(bin, args...)
-	toexec.Env = append(toexec.Env, env...)
+	toexec.Env = append(toexec.Env, env.ToArray()...)
 	toexec.Env = append(toexec.Env, os.Environ()...)
 	toexec.Stdout = os.Stdout
 	toexec.Stdin = os.Stdin
 	toexec.Stderr = os.Stderr
-	err := toexec.Run()
-	if err != nil {
-		fmt.Println("-------------------------------------------")
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
+	if !dry {
+		err := toexec.Run()
+		if err != nil {
+			fmt.Println("-------------------------------------------")
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
 	}
+
 }
 
 var RootCmd = &cobra.Command{
 	Use: "ecli",
 	Run: func(cmd *cobra.Command, args []string) {
-		config, _ := loadConfig()
+		configFile, _ := cmd.PersistentFlags().GetString("config")
+		dry, _ := cmd.PersistentFlags().GetBool("dry")
+		config, err := loadConfig(configFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading config %s: '%s'.\n", configFile, err)
+			os.Exit(1)
+		}
 		if len(args) > 0 || config.Default != "" {
 			var commands []string
 			if len(args) > 0 {
@@ -131,31 +194,35 @@ var RootCmd = &cobra.Command{
 			}
 			for _, command := range commands {
 				if e, ok := config.Commands[command]; ok {
-					callCommand(config.Bin, e, config)
+					callCommand(config.Bin, e, config, dry)
 				} else {
 					fmt.Fprintf(os.Stderr, "Invalid Command: '%s'.\n", command)
 					os.Exit(1)
 				}
 			}
 		} else {
-			callCommand(config.Bin, CommandConfig{}, config)
+			callCommand(config.Bin, CommandConfig{}, config, dry)
 		}
 	},
 }
 
-func loadConfig() (RunConfig, error) {
-	var rc RunConfig
-	f, _ := os.Open(".eclirc")
+func loadConfig(configFile string) (MainConfig, error) {
+	var rc MainConfig
+	f, ferr := os.Open(configFile)
+	if ferr != nil {
+		return rc, ferr
+	}
 	defer f.Close()
 	p := json.NewDecoder(f)
 	err := p.Decode(&rc)
 	if err != nil {
-		panic(err)
+		return rc, err
 	}
-
 	return rc, nil
 }
 
 func init() {
-
+	RootCmd.PersistentFlags().StringP("config", "c", ".eclirc", "easy-cli Config File. Default: .eclirc")
+	RootCmd.PersistentFlags().BoolP("verbose", "v", false, "Tell me what you do.")
+	RootCmd.PersistentFlags().BoolP("dry", "d", false, "Dry run.")
 }

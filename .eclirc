@@ -1,15 +1,21 @@
 {
-    "Bin": "restic",
-    "Env": {
+    "bin": "restic",
+    "env": {
         "RESTIC_PASSWORD_FILE": "C:/Users/jblaw/.resticpw",
         "RESTIC_REPOSITORY": "C:/Users/jblaw/.restic-repo"
     },
-    "Args": {},
-    "Default": "",
-    "Commands": {
+    "default": "snapshots",
+    "commands": {
         "snapshots": {
-            "Default": true,
-            "Command": "snapshots"
+            "args": [
+                "snapshots"
+            ]
+        },
+        "b": {
+            "args": [
+                "backup",
+                "{{.HOME}}\\.vim"
+            ]
         }
     }
 }
