@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -12,6 +13,13 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+var logger *log.Logger
+
+func Exit1(err error) {
+	fmt.Fprintf(os.Stderr, "%v\n", err)
+	os.Exit(1)
+}
 
 type Flags map[string]interface{}
 type Env map[string]string
@@ -65,7 +73,13 @@ func mergeFlags(a Flags, b Flags) Flags {
 	if b == nil {
 		return a
 	}
+	if a == nil {
+		return b
+	}
 	var m Flags
+	if a == nil && b == nil {
+		return m
+	}
 	for k, v := range a {
 		m[k] = v
 	}
@@ -76,10 +90,17 @@ func mergeFlags(a Flags, b Flags) Flags {
 }
 
 func mergeEnv(a Env, b Env) Env {
-	if b == nil {
+	if b == nil && a != nil {
 		return a
 	}
+	if a == nil && b != nil {
+		return b
+	}
+
 	var m Env
+	if a == nil && b == nil {
+		return m
+	}
 	for k, v := range a {
 		m[k] = v
 	}
@@ -155,8 +176,9 @@ func callCommand(bin string, c CommandConfig, defaults MainConfig, dry bool) {
 
 	env := mergeEnv(defaults.Env, c.Env)
 
-	log.Println(args)
-	log.Println(env)
+	logger.Println("Command: ", bin)
+	logger.Println("Command arguments: ", args)
+	logger.Println("Command environment: ", env)
 
 	toexec := exec.Command(bin, args...)
 	toexec.Env = append(toexec.Env, env.ToArray()...)
@@ -164,12 +186,11 @@ func callCommand(bin string, c CommandConfig, defaults MainConfig, dry bool) {
 	toexec.Stdout = os.Stdout
 	toexec.Stdin = os.Stdin
 	toexec.Stderr = os.Stderr
+
 	if !dry {
 		err := toexec.Run()
 		if err != nil {
-			fmt.Println("-------------------------------------------")
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			os.Exit(1)
+			Exit1(err)
 		}
 	}
 
@@ -178,12 +199,16 @@ func callCommand(bin string, c CommandConfig, defaults MainConfig, dry bool) {
 var RootCmd = &cobra.Command{
 	Use: "ecli",
 	Run: func(cmd *cobra.Command, args []string) {
+		if verbose, _ := cmd.PersistentFlags().GetBool("verbose"); verbose {
+			logger.SetOutput(os.Stdout)
+		} else {
+			logger.SetOutput(ioutil.Discard)
+		}
 		configFile, _ := cmd.PersistentFlags().GetString("config")
 		dry, _ := cmd.PersistentFlags().GetBool("dry")
 		config, err := loadConfig(configFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading config %s: '%s'.\n", configFile, err)
-			os.Exit(1)
+			Exit1(fmt.Errorf("Error loading config %s: %s", configFile, err))
 		}
 		if len(args) > 0 || config.Default != "" {
 			var commands []string
@@ -196,8 +221,7 @@ var RootCmd = &cobra.Command{
 				if e, ok := config.Commands[command]; ok {
 					callCommand(config.Bin, e, config, dry)
 				} else {
-					fmt.Fprintf(os.Stderr, "Invalid Command: '%s'.\n", command)
-					os.Exit(1)
+					Exit1(fmt.Errorf("Invalid Command: %s", command))
 				}
 			}
 		} else {
@@ -225,4 +249,5 @@ func init() {
 	RootCmd.PersistentFlags().StringP("config", "c", ".eclirc", "easy-cli Config File. Default: .eclirc")
 	RootCmd.PersistentFlags().BoolP("verbose", "v", false, "Tell me what you do.")
 	RootCmd.PersistentFlags().BoolP("dry", "d", false, "Dry run.")
+	logger = log.New(ioutil.Discard, "EASY_CLI - ", log.Ldate|log.Ltime)
 }

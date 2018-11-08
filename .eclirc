@@ -4,6 +4,7 @@
         "RESTIC_PASSWORD_FILE": "C:/Users/jblaw/.resticpw",
         "RESTIC_REPOSITORY": "C:/Users/jblaw/.restic-repo"
     },
+    "args": {},
     "default": "snapshots",
     "commands": {
         "snapshots": {
@@ -12,9 +13,17 @@
             ]
         },
         "b": {
+            "flags": {
+                "--hostname": "DESKTOP-JENKO"
+            },
             "args": [
                 "backup",
                 "{{.HOME}}\\.vim"
+            ]
+        },
+        "check": {
+            "args": [
+                "check"
             ]
         }
     }
